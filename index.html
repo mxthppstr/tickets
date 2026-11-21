@@ -183,6 +183,21 @@ input[type=number]{width:76px}
 .task .status{font-size:13px;font-weight:700;border-radius:999px;padding:3px 10px;background:var(--plum-soft);color:var(--ink);white-space:nowrap}
 .task.on .status{background:var(--plum);color:var(--surface)}
 .task.slip.on .status{background:var(--slip);color:var(--surface)}
+
+/* Keep drawer contents inside the screen (details content otherwise falls back to content-box) */
+details>*{box-sizing:border-box}
+
+/* App guide */
+.gtypes{display:flex;flex-direction:column;gap:8px}
+.gtype{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:15px}
+.gtype b{display:block}
+.gtype span{color:var(--muted)}
+
+/* Drag to reorder */
+.grip{flex:none;display:flex;align-items:center;justify-content:center;width:32px;align-self:stretch;min-height:42px;color:var(--muted);fill:currentColor;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;cursor:grab}
+.row.dragging{position:relative;z-index:5;background:var(--surface);border-radius:10px;box-shadow:0 0 0 6px var(--surface),0 10px 26px rgba(0,0,0,.22)}
+.row.dragging .grip{color:var(--plum);cursor:grabbing}
+body.dragging-on{-webkit-user-select:none;user-select:none}
 </style>
 </head>
 <body>
@@ -331,47 +346,10 @@ const todayLog=()=>state.log.filter(e=>e.day===dayKey());
 const todayNet=()=>sum(todayLog(),e=>e.pts);
 const todaySlipLoss=()=>-sum(todayLog().filter(e=>e.pts<0),e=>e.pts);
 
-/* ---------- persistence: this device + synced store ---------- */
-let ref=null, saving=false, dirty=false, timer=null;
-const syncEl=document.getElementById('sync');
+/* ---------- persistence: this phone only ---------- */
 function persist(){
   state.updatedAt=Date.now();
   try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
-  if(!ref) return;
-  dirty=true; clearTimeout(timer); timer=setTimeout(flush,400);
-}
-async function flush(){
-  if(saving||!ref) return;
-  saving=true;
-  while(dirty){
-    dirty=false;
-    try{ await ref.set(JSON.parse(JSON.stringify(state))); syncEl.textContent='Synced'; }
-    catch(e){ syncEl.textContent='Saved on this device only'; if(e&&e.code==='invalid_argument'){ref=null;break;} }
-  }
-  saving=false;
-}
-async function connect(){
-  try{
-    if(!window.claude||!window.claude.use) return;
-    const db=await window.claude.use('db'); const user=await window.claude.use('user');
-    if(!db||!user) return;
-    const id=await user.id(); if(!id) return;
-    ref=db.collection('data/users/'+id).doc('state');
-    syncEl.textContent='Syncing…';
-    const snap=await ref.get();
-    if(snap.exists){
-      const remote=snap.data();
-      if(!remote.updatedAt || remote.updatedAt>=state.updatedAt || !localStorage.getItem(KEY)){
-        state=JSON.parse(JSON.stringify(remote)); try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}
-        render();
-      }else{ dirty=true; flush(); }
-    }else{ dirty=true; await flush(); }
-    syncEl.textContent='Synced';
-    ref.onSnapshot(s=>{
-      if(!s.exists||s.metadata.hasPendingWrites||saving||dirty) return;
-      const r=s.data(); if(r.updatedAt&&r.updatedAt>state.updatedAt){ state=JSON.parse(JSON.stringify(r)); try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){} render(); }
-    },()=>{ syncEl.textContent='Saved on this device only'; });
-  }catch(e){ syncEl.textContent='Saved on this device'; }
 }
 
 /* ---------- actions ---------- */
@@ -449,7 +427,7 @@ function vReview(){
     <div class="review-stats"><div><small>Past 7 days</small><b>+${w.e}</b></div><div><small>Average day</small><b>+${avg}</b></div><div><small>vs. week before</small><b>${vs}</b></div></div>
     <p>${w.days} ${w.days===1?'day':'days'} logged · ${w.slips} ${w.slips===1?'slip-up':'slip-ups'} · ${spent} ${spent===1?'prize':'prizes'} redeemed</p>
     <p class="hint">Quick checks: averaging well over 25 a day? Trim the easy stuff. Earning but not redeeming? Prizes are too pricey or not things you want. Hitting the slip cap most days? Rethink the slip list.</p>
-    <button class="btn ghost" data-guide="open">Open Ticket math</button></section>`;
+    <button class="btn ghost" data-guide="open">Open pricing guide</button></section>`;
 }
 
 function vBig(){
@@ -550,15 +528,15 @@ function vHistoryBody(){
 }
 
 function vSettings(){
-  const row=(t,arr,i,n,mv)=>`<div class="row">${mv?`<span class="mv"><button class="mvb" data-move="${arr}:${t.id}:-1" aria-label="Move ${esc(t.name)} up" ${i===0?'disabled':''}>↑</button><button class="mvb" data-move="${arr}:${t.id}:1" aria-label="Move ${esc(t.name)} down" ${i===n-1?'disabled':''}>↓</button></span>`:''}<input type="text" value="${esc(t.name)}" data-edit="${arr}:${t.id}:name" aria-label="Name"><input type="number" min="1" value="${arr==='rewards'?t.cost:t.pts}" data-edit="${arr}:${t.id}:${arr==='rewards'?'cost':'pts'}" aria-label="Amount"><button class="link" data-del="${arr}:${t.id}">Delete</button></div>`;
+  const row=(t,arr,i,n,mv)=>`<div class="row">${mv?`<span class="grip" data-grip="${arr}:${t.id}" role="img" aria-label="Drag to reorder ${esc(t.name)}"><svg width="14" height="20" viewBox="0 0 14 20" aria-hidden="true"><circle cx="3.5" cy="4" r="1.8"/><circle cx="10.5" cy="4" r="1.8"/><circle cx="3.5" cy="10" r="1.8"/><circle cx="10.5" cy="10" r="1.8"/><circle cx="3.5" cy="16" r="1.8"/><circle cx="10.5" cy="16" r="1.8"/></svg></span>`:''}<input type="text" value="${esc(t.name)}" data-edit="${arr}:${t.id}:name" aria-label="Name"><input type="number" min="1" value="${arr==='rewards'?t.cost:t.pts}" data-edit="${arr}:${t.id}:${arr==='rewards'?'cost':'pts'}" aria-label="Amount"><button class="link" data-del="${arr}:${t.id}">Delete</button></div>`;
   const drawer=(key,title,meta,body)=>`<details class="drawer" data-drawer="${key}" ${open[key]?'open':''}><summary><span>${title}</span><span class="sum-meta">${meta}</span></summary>${body}</details>`;
-  const list=(items,arr,empty,mv=true)=>items.length?items.map((t,i)=>row(t,arr,i,items.length,mv)).join(''):`<p class="empty">${empty}</p>`;
+  const list=(items,arr,empty,mv=true)=>items.length?'<div class="sortlist">'+items.map((t,i)=>row(t,arr,i,items.length,mv)).join('')+'</div>':`<p class="empty">${empty}</p>`;
   const good=state.tasks.filter(t=>t.kind==='good'), slips=state.tasks.filter(t=>t.kind==='slip');
   const shop=state.rewards.filter(r=>r.type==='shop'), ms=state.rewards.filter(r=>r.type==='milestone').sort((a,b)=>a.cost-b.cost);
   let h='<h2 style="margin-top:4px">Settings</h2>';
   h+=drawer('add','Add something','',
     `<p class="hint">For a good thing, slip-up, bounty or goal, the number is tickets. Bounties also get up to +5 early bonus, shrinking by 1 each day they wait. For a prize, it’s the cost. For a milestone, it’s the all-time total that unlocks it.</p>
-     <div class="row"><select id="addType" aria-label="What to add"><option value="good">Good thing</option>${state.settings.slips?'<option value="slip">Slip-up</option>':''}<option value="bounty">Bounty (hard one-time thing)</option><option value="goal">Goal (ongoing)</option><option value="shop">Prize</option><option value="milestone">Milestone</option></select></div>
+     <div class="row"><select id="addType" aria-label="What to add"><option value="good">Good thing</option>${state.settings.slips?'<option value="slip">Slip-up</option>':''}<option value="bounty">Bounty</option><option value="goal">Goal</option><option value="shop">Prize</option><option value="milestone">Milestone</option></select></div>
      <div class="row"><input type="text" id="addName" placeholder="Name" aria-label="Name"><input type="number" id="addPts" min="1" value="${lastAdd||1}" aria-label="Tickets"><button class="btn" id="addBtn">Add</button></div>`);
   h+=drawer('tasks','Edit tasks',`${good.length+slips.length}`,
     '<h3 class="group">Good things</h3><p class="hint">Bigger or harder = more tickets. Break huge projects into hour-sized chunks.</p>'+list(good,'tasks','No good things yet.')+
@@ -610,8 +588,18 @@ function vSettings(){
   const wkNav=`<div class="wknav"><button class="btn ghost" data-wk="1" ${canOlder?'':'disabled'}>‹ Older</button><span>${weekOff===0?'Most recent':weekOff===1?'1 week back':weekOff+' weeks back'}</span><button class="btn ghost" data-wk="-1" ${weekOff===0?'disabled':''}>Newer ›</button></div>`;
   h+=drawer('lastweek','Sunday check-ins',lsD.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'}),
     wkNav+`<p class="hint">The week of ${md(wkStart)}–${md(wkEnd)}, checked in on ${md(lsD)}.</p>`+weekTiles(ls));
-  h+=drawer('guide','Ticket math','Pricing guide',
-    `<p class="hint">Use this when adding or editing tasks so the numbers stay honest.</p>
+  h+=drawer('guide','App guide','',
+    `<h3 class="group" style="margin-top:4px">What you can add</h3>
+     <div class="gtypes">
+       <div class="gtype"><b>Good thing</b><span>Something that earns tickets. Tap it under Did something good each time you do it.</span></div>
+       <div class="gtype"><b>Slip-up</b><span>A habit you’re cutting back on. Tapping it costs tickets, up to the daily cap. It never lowers your all-time total or milestones.</span></div>
+       <div class="gtype"><b>Bounty</b><span>A hard one-time thing. Pays once when done, plus an early bonus: +5 the day you add it, dropping by 1 each day it waits.</span></div>
+       <div class="gtype"><b>Goal</b><span>Something ongoing. Tap it once a day when you work on it, and it counts the days you’ve worked on it.</span></div>
+       <div class="gtype"><b>Prize</b><span>Something you buy with tickets on the Prizes tab. The number is its cost.</span></div>
+       <div class="gtype"><b>Milestone</b><span>Unlocks on its own when your all-time tickets reach its number. Nothing gets spent.</span></div>
+     </div>
+     <h3 class="group">Pricing guide</h3>
+     <p class="hint">Use this when adding or editing tasks so the numbers stay honest.</p>
      <div class="guide-wrap"><table class="guide"><thead><tr><th>Tickets</th><th>What it takes</th><th>Examples</th></tr></thead><tbody>
        <tr><td>1</td><td>Under 10 minutes, low resistance</td><td>Made bed, opened blinds</td></tr>
        <tr><td>2–3</td><td>10–30 minutes, or small but annoying</td><td>Dishes, a walk, texting a friend back</td></tr>
@@ -687,6 +675,51 @@ V.addEventListener('click',e=>{
     if(k==='milestone') checkMilestones();
     persist(); render(); }
 });
+/* ---------- drag to reorder (Settings) ---------- */
+let drag=null;
+function dragTick(){
+  if(!drag) return;
+  const edgeTop=90, edgeBot=window.innerHeight-120; let sp=0;
+  if(drag.cy<edgeTop) sp=-Math.ceil((edgeTop-drag.cy)/6);
+  else if(drag.cy>edgeBot) sp=Math.ceil((drag.cy-edgeBot)/6);
+  if(sp){ window.scrollBy(0,sp); dragMove(); }
+  drag.raf=requestAnimationFrame(dragTick);
+}
+function dragMove(){
+  const d=drag, row=d.row; let dy=d.cy+window.scrollY-d.startY;
+  for(;;){
+    const center=row.offsetTop+dy+row.offsetHeight/2;
+    const nx=row.nextElementSibling, pv=row.previousElementSibling;
+    if(nx&&center>nx.offsetTop+nx.offsetHeight/2){ const b=row.offsetTop; d.box.insertBefore(nx,row); const shift=row.offsetTop-b; d.startY+=shift; dy-=shift; continue; }
+    if(pv&&center<pv.offsetTop+pv.offsetHeight/2){ const b=row.offsetTop; d.box.insertBefore(row,pv); const shift=row.offsetTop-b; d.startY+=shift; dy-=shift; continue; }
+    break;
+  }
+  row.style.transform=`translateY(${dy}px)`;
+}
+function dragEnd(){
+  const d=drag; if(!d) return; drag=null; cancelAnimationFrame(d.raf);
+  d.row.classList.remove('dragging'); d.row.style.transform=''; document.body.classList.remove('dragging-on');
+  const ids=[...d.box.querySelectorAll('[data-grip]')].map(x=>x.dataset.grip.split(':')[1]);
+  if(ids.join()===d.before) return;
+  const a=state[d.arr], byId={}; a.forEach(x=>byId[x.id]=x);
+  const slots=[]; a.forEach((x,i)=>{ if(ids.includes(x.id)) slots.push(i); });
+  slots.forEach((pos,k)=>{ a[pos]=byId[ids[k]]; });
+  persist(); render();
+}
+V.addEventListener('pointerdown',e=>{
+  const g=e.target.closest('.grip'); if(!g||drag) return;
+  const row=g.closest('.row'), box=row&&row.parentElement; if(!box) return;
+  e.preventDefault(); try{g.setPointerCapture(e.pointerId);}catch(_){}
+  if(document.activeElement&&document.activeElement.blur) document.activeElement.blur();
+  const arr=g.dataset.grip.split(':')[0];
+  drag={row,box,arr,id:e.pointerId,startY:e.clientY+window.scrollY,cy:e.clientY,before:[...box.querySelectorAll('[data-grip]')].map(x=>x.dataset.grip.split(':')[1]).join()};
+  row.classList.add('dragging'); document.body.classList.add('dragging-on');
+  drag.raf=requestAnimationFrame(dragTick);
+});
+V.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.id) return; e.preventDefault(); drag.cy=e.clientY; dragMove(); });
+V.addEventListener('pointerup',e=>{ if(drag&&e.pointerId===drag.id) dragEnd(); });
+V.addEventListener('pointercancel',e=>{ if(drag&&e.pointerId===drag.id) dragEnd(); });
+
 V.addEventListener('change',e=>{
   const el=e.target;
   if(el.dataset.edit){ const [arr,id,field]=el.dataset.edit.split(':'); const item=state[arr].find(x=>x.id===id); if(!item) return;
