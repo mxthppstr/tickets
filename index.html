@@ -198,6 +198,18 @@ details>*{box-sizing:border-box}
 .row.dragging{position:relative;z-index:5;background:var(--surface);border-radius:10px;box-shadow:0 0 0 6px var(--surface),0 10px 26px rgba(0,0,0,.22)}
 .row.dragging .grip{color:var(--plum);cursor:grabbing}
 body.dragging-on{-webkit-user-select:none;user-select:none}
+
+/* Pins and See all */
+.seemore{flex:none;border:1px solid var(--line);background:var(--surface);color:var(--plum);border-radius:999px;padding:4px 11px;font-size:13px;font-weight:700;white-space:nowrap}
+.pin{flex:none;width:36px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--muted);display:flex;align-items:center;justify-content:center;padding:0}
+.pin svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2}
+.pin[aria-pressed="true"]{background:var(--plum);border-color:var(--plum);color:var(--surface)}
+.pin[aria-pressed="true"] svg{fill:currentColor}
+.sortlist .row input[type=number]{width:58px}
+
+/* After-midnight banner */
+.late{background:var(--plum-soft);border-radius:12px;padding:12px 14px;margin-bottom:6px}
+.late p{margin:0 0 10px;font-size:15px}
 </style>
 </head>
 <body>
@@ -226,7 +238,12 @@ body.dragging-on{-webkit-user-select:none;user-select:none}
 (function(){
 const KEY='ticket-counter-v1';
 const uid=()=>Math.random().toString(36).slice(2,10);
-const dayKey=(d=new Date())=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const calKey=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const DAY_START=6; // anything logged before 6am counts toward the previous day
+function advancedToday(d){ let adv=null; try{ adv=state.settings.advancedDay; }catch(e){} return adv===calKey(d); }
+function nowDay(){ const d=new Date(); if(d.getHours()<DAY_START&&!advancedToday(d)) d.setDate(d.getDate()-1); return d; }
+function isLateNight(){ const d=new Date(); return d.getHours()<DAY_START&&!advancedToday(d); }
+const dayKey=(d=nowDay())=>calKey(d);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function defaults(){
@@ -260,7 +277,7 @@ let state;
 try{ const raw=localStorage.getItem(KEY); state=raw?JSON.parse(raw):defaults(); }catch(e){ state=defaults(); }
 let view='today';
 const open={good:true,slip:true,add:true,tasks:false,rewards:false,rules:false,backup:false,guide:false,big:true,lastweek:false,appearance:false};
-function lastSundayKey(){ const d=new Date(); d.setDate(d.getDate()-d.getDay()); return dayKey(d); }
+function lastSundayKey(){ const d=nowDay(); d.setDate(d.getDate()-d.getDay()); return dayKey(d); }
 function weekTiles(sun){
   const range=(from,to)=>{ let e=0,slips=0; const ds=new Set(); state.log.forEach(x=>{ const a=daysBetween(x.day,sun); if(a>=from&&a<=to){ if(x.pts>0) e+=x.pts; if(x.kind==='slip') slips++; ds.add(x.day); } }); return {e,slips,days:ds.size}; };
   const w=range(1,7), p=range(8,14);
@@ -305,6 +322,12 @@ function agoText(ts){
 }
 let textMode=null;
 function backupText(){ return JSON.stringify({app:'ticket-counter',exportedAt:Date.now(),state},null,2); }
+function canShareFiles(){ try{ return !!(navigator.canShare&&navigator.canShare({files:[new File(['{}'],'t.json',{type:'application/json'})]})); }catch(e){ return false; } }
+async function shareBackup(){
+  const f=new File([backupText()],'ticket-counter-backup-'+dayKey()+'.json',{type:'application/json'});
+  try{ await navigator.share({files:[f]}); state.settings.lastBackup=Date.now(); persist(); render(); toast('Backup saved'); }
+  catch(e){ if(e&&e.name==='AbortError') return; toast('Couldn\u2019t open the share sheet. Try Download backup.'); }
+}
 function backup(){
   try{
     const blob=new Blob([backupText()],{type:'application/json'});
@@ -394,20 +417,33 @@ function header(bump){
   const b=document.getElementById('bal'); b.textContent=balance();
   if(bump){ b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); }
   const t=todayNet(); document.getElementById('today').textContent='Today '+(t>=0?'+':'−')+Math.abs(t);
-  document.getElementById('life').textContent=new Date().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+  document.getElementById('life').textContent=nowDay().toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
   document.querySelectorAll('nav button').forEach(n=>{ if(n.dataset.view===(view==='all'?'today':(view==='history'||view==='icons')?'settings':view)) n.setAttribute('aria-current','page'); else n.removeAttribute('aria-current'); });
 }
 
+function pinNew(k){ return state.tasks.some(t=>t.kind===k&&t.pinned); }
+function lateBanner(){
+  if(!isLateNight()) return '';
+  const fmt=d=>d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+  return `<section class="late" aria-label="After midnight"><p>It’s after midnight, so anything you log still counts toward <b>${fmt(nowDay())}</b> until 6am.</p><button class="btn" data-advance="1">Start ${fmt(new Date())} now</button></section>`;
+}
+const showAll={good:false,slip:false};
 function vToday(){
   const counts={}; todayLog().forEach(e=>counts[e.name]=(counts[e.name]||0)+1);
   const good=state.tasks.filter(t=>t.kind==='good'), slips=state.tasks.filter(t=>t.kind==='slip');
-  let h=vReview()+`<details class="drawer" data-drawer="good" ${open.good?'open':''}><summary><span>Did something good</span><span class="sum-meta">${good.length} tasks</span></summary><div class="list">`;
-  h+=good.length?good.map(t=>`<button class="task${counts[t.name]?' done-today':''}" data-good="${t.id}"><span class="name">${esc(t.name)}</span>${counts[t.name]?`<span class="count">×${counts[t.name]}</span>`:''}<span class="pts up">+${t.pts}</span></button>`).join(''):'<p class="empty">Add a few tasks in Settings to get started.</p>';
-  h+='</div><div class="oneoff"><input type="text" id="ooName" placeholder="Something else I did" aria-label="One-off task"><input type="number" id="ooPts" min="1" max="50" value="3" aria-label="Tickets"><button class="btn" id="ooAdd">Log</button></div></details>';
+  // Pinned items show by default; anything already logged today stays visible too. No pins = show everything.
+  const pick=(arr,kind)=>{ const n=arr.filter(t=>t.pinned).length; if(!n) return {items:arr,mode:'none',n}; if(showAll[kind]) return {items:arr,mode:'all',n}; return {items:arr.filter(t=>t.pinned||counts[t.name]),mode:'pinned',n}; };
+  const more=(kind,p,total)=>p.mode==='none'?'':`<button class="seemore" data-seemore="${kind}">${p.mode==='all'?'Pinned only':'See all '+total}</button>`;
+  const G=pick(good,'good');
+  let h=lateBanner()+vReview()+`<details class="drawer" data-drawer="good" ${open.good?'open':''}><summary><span>Did something good</span>${G.mode==='none'?`<span class="sum-meta">${good.length} tasks</span>`:''}${more('good',G,good.length)}</summary><div class="list">`;
+  h+=good.length?G.items.map(t=>`<button class="task${counts[t.name]?' done-today':''}" data-good="${t.id}"><span class="name">${esc(t.name)}</span>${counts[t.name]?`<span class="count">×${counts[t.name]}</span>`:''}<span class="pts up">+${t.pts}</span></button>`).join(''):'<p class="empty">Add a few tasks in Settings to get started.</p>';
+  h+='</div>';
+  if(G.mode==='none'&&good.length>8) h+='<p class="hint" style="margin-top:8px">Tip: pin your go-to tasks in Settings → Edit tasks to keep this list short.</p>';
+  h+='<div class="oneoff"><input type="text" id="ooName" placeholder="Something else I did" aria-label="One-off task"><input type="number" id="ooPts" min="1" max="50" value="3" aria-label="Tickets"><button class="btn" id="ooAdd">Log</button></div></details>';
   if(state.settings.slips){
-    const left=Math.max(0,state.settings.dailyCap-todaySlipLoss());
-    h+=`<details class="drawer" data-drawer="slip" ${open.slip?'open':''}><summary><span>Slipped up</span><span class="sum-meta">${left} left to lose today</span></summary><div class="list">`;
-    h+=slips.length?slips.map(t=>`<button class="task slip" data-slip="${t.id}"><span class="name">${esc(t.name)}</span>${counts[t.name]?`<span class="count">×${counts[t.name]}</span>`:''}<span class="pts down">−${t.pts}</span></button>`).join(''):'<p class="empty">No slip-ups set up.</p>';
+    const left=Math.max(0,state.settings.dailyCap-todaySlipLoss()), S=pick(slips,'slip');
+    h+=`<details class="drawer" data-drawer="slip" ${open.slip?'open':''}><summary><span>Slipped up</span><span class="sum-meta">${left} left${S.mode==='none'?' to lose today':''}</span>${more('slip',S,slips.length)}</summary><div class="list">`;
+    h+=slips.length?S.items.map(t=>`<button class="task slip" data-slip="${t.id}"><span class="name">${esc(t.name)}</span>${counts[t.name]?`<span class="count">×${counts[t.name]}</span>`:''}<span class="pts down">−${t.pts}</span></button>`).join(''):'<p class="empty">No slip-ups set up.</p>';
     h+='</div></details>';
   }
   h+=vBig();
@@ -417,7 +453,7 @@ function vToday(){
 
 function vReview(){
   const today=dayKey();
-  if(new Date().getDay()!==0||state.settings.reviewedDay===today) return '';
+  if(nowDay().getDay()!==0||state.settings.reviewedDay===today) return '';
   const range=(from,to)=>{ let e=0,slips=0; const ds=new Set(); state.log.forEach(x=>{ const a=daysBetween(x.day,today); if(a>=from&&a<=to){ if(x.pts>0) e+=x.pts; if(x.kind==='slip') slips++; ds.add(x.day); } }); return {e,slips,days:ds.size}; };
   const w=range(1,7), p=range(8,14);
   const avg=w.days?Math.round(w.e/w.days):0, diff=w.e-p.e;
@@ -460,7 +496,7 @@ function vStats(){
   const topGood=count(by('good')).slice(0,3), topSlip=count(by('slip')).slice(0,1);
   const fmt=d=>new Date(d+'T12:00').toLocaleDateString(undefined,{month:'short',day:'numeric'});
   const card=(label,val,note)=>`<div class="stat"><small>${label}</small><b>${val}</b>${note?`<small>${note}</small>`:''}</div>`;
-  const week=[]; for(let i=6;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); const k=dayKey(d); week.push({k,v:dayMap[k]||0,l:d.toLocaleDateString(undefined,{weekday:'narrow'})}); }
+  const week=[]; for(let i=6;i>=0;i--){ const d=nowDay(); d.setDate(d.getDate()-i); const k=dayKey(d); week.push({k,v:dayMap[k]||0,l:d.toLocaleDateString(undefined,{weekday:'narrow'})}); }
   const wmax=Math.max(1,...week.map(w=>w.v));
   let h='<h2 style="margin-top:4px">Stats</h2>';
   h+=`<div class="stat-hero"><small>All-time tickets earned</small><b>${lifetime()}</b></div>`;
@@ -528,7 +564,7 @@ function vHistoryBody(){
 }
 
 function vSettings(){
-  const row=(t,arr,i,n,mv)=>`<div class="row">${mv?`<span class="grip" data-grip="${arr}:${t.id}" role="img" aria-label="Drag to reorder ${esc(t.name)}"><svg width="14" height="20" viewBox="0 0 14 20" aria-hidden="true"><circle cx="3.5" cy="4" r="1.8"/><circle cx="10.5" cy="4" r="1.8"/><circle cx="3.5" cy="10" r="1.8"/><circle cx="10.5" cy="10" r="1.8"/><circle cx="3.5" cy="16" r="1.8"/><circle cx="10.5" cy="16" r="1.8"/></svg></span>`:''}<input type="text" value="${esc(t.name)}" data-edit="${arr}:${t.id}:name" aria-label="Name"><input type="number" min="1" value="${arr==='rewards'?t.cost:t.pts}" data-edit="${arr}:${t.id}:${arr==='rewards'?'cost':'pts'}" aria-label="Amount"><button class="link" data-del="${arr}:${t.id}">Delete</button></div>`;
+  const row=(t,arr,i,n,mv)=>`<div class="row">${mv?`<span class="grip" data-grip="${arr}:${t.id}" role="img" aria-label="Drag to reorder ${esc(t.name)}"><svg width="14" height="20" viewBox="0 0 14 20" aria-hidden="true"><circle cx="3.5" cy="4" r="1.8"/><circle cx="10.5" cy="4" r="1.8"/><circle cx="3.5" cy="10" r="1.8"/><circle cx="10.5" cy="10" r="1.8"/><circle cx="3.5" cy="16" r="1.8"/><circle cx="10.5" cy="16" r="1.8"/></svg></span>`:''}<input type="text" value="${esc(t.name)}" data-edit="${arr}:${t.id}:name" aria-label="Name"><input type="number" min="1" value="${arr==='rewards'?t.cost:t.pts}" data-edit="${arr}:${t.id}:${arr==='rewards'?'cost':'pts'}" aria-label="Amount">${arr==='tasks'?`<button class="pin" data-pin="${t.id}" aria-pressed="${!!t.pinned}" aria-label="Pin ${esc(t.name)} to Today"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l-1 6 4 4H6l4-4-1-6z" stroke-linejoin="round"/><path d="M12 13v8" stroke-linecap="round"/></svg></button>`:''}<button class="link" data-del="${arr}:${t.id}">Delete</button></div>`;
   const drawer=(key,title,meta,body)=>`<details class="drawer" data-drawer="${key}" ${open[key]?'open':''}><summary><span>${title}</span><span class="sum-meta">${meta}</span></summary>${body}</details>`;
   const list=(items,arr,empty,mv=true)=>items.length?'<div class="sortlist">'+items.map((t,i)=>row(t,arr,i,items.length,mv)).join('')+'</div>':`<p class="empty">${empty}</p>`;
   const good=state.tasks.filter(t=>t.kind==='good'), slips=state.tasks.filter(t=>t.kind==='slip');
@@ -539,7 +575,7 @@ function vSettings(){
      <div class="row"><select id="addType" aria-label="What to add"><option value="good">Good thing</option>${state.settings.slips?'<option value="slip">Slip-up</option>':''}<option value="bounty">Bounty</option><option value="goal">Goal</option><option value="shop">Prize</option><option value="milestone">Milestone</option></select></div>
      <div class="row"><input type="text" id="addName" placeholder="Name" aria-label="Name"><input type="number" id="addPts" min="1" value="${lastAdd||1}" aria-label="Tickets"><button class="btn" id="addBtn">Add</button></div>`);
   h+=drawer('tasks','Edit tasks',`${good.length+slips.length}`,
-    '<h3 class="group">Good things</h3><p class="hint">Bigger or harder = more tickets. Break huge projects into hour-sized chunks.</p>'+list(good,'tasks','No good things yet.')+
+    '<p class="hint">Tap the pin to keep a task on Today; the rest sit behind “See all.” Drag the dots to change the order.</p><h3 class="group">Good things</h3><p class="hint">Bigger or harder = more tickets. Break huge projects into hour-sized chunks.</p>'+list(good,'tasks','No good things yet.')+
     (state.settings.slips?'<h3 class="group">Slip-ups</h3><p class="hint">Keep these small: 1 to 3 tickets.</p>'+list(slips,'tasks','No slip-ups yet.'):'')+
     '<h3 class="group">Bounties</h3>'+list(state.bounties.filter(b=>!b.doneTs),'bounties','No open bounties.')+
     '<h3 class="group">Goals</h3>'+list(state.goals,'goals','No goals yet.'));
@@ -573,7 +609,7 @@ function vSettings(){
   h+=drawer('backup','Backup and restore',lb?'Last: '+agoText(lb):'Never backed up',
     `<p class="hint">Your data lives only on this phone, so back up weekly. Backups save to the Files app. Restoring replaces what’s here with the backup.</p>
      <p class="lastb">Last downloaded: <b>${when}</b></p>
-     <div class="row"><button class="btn" id="backupBtn">Download backup</button><button class="btn ghost" id="restoreBtn">Restore from file</button></div>
+     ${canShareFiles()?'<div class="row"><button class="btn" id="shareBtn">Save to Google Drive or Files</button></div>':''}<div class="row"><button class="btn" id="backupBtn">Download backup</button><button class="btn ghost" id="restoreBtn">Restore from file</button></div>
      <input type="file" id="restoreFile" accept=".json,application/json,text/plain" hidden>
      <div class="row"><button class="link" id="showText">Show backup text</button><button class="link" id="pasteText">Paste backup text</button></div>
      ${textMode==='show'?`<p class="hint">Select all and copy this, then paste it into a note or email to yourself.</p><textarea id="bkText" readonly rows="6" style="width:100%">${esc(backupText())}</textarea><div class="row"><button class="btn ghost" id="markCopied">I saved it</button></div>`:''}
@@ -624,6 +660,9 @@ document.querySelector('nav').addEventListener('click',e=>{ const b=e.target.clo
 const V=document.getElementById('view');
 V.addEventListener('click',e=>{
   const t=e.target.closest('button'); if(!t) return;
+  if(t.dataset.seemore){ e.preventDefault(); const k=t.dataset.seemore; showAll[k]=!showAll[k]; open[k]=true; render(); return; }
+  if(t.dataset.pin){ const x=state.tasks.find(y=>y.id===t.dataset.pin); if(x){ x.pinned=!x.pinned; persist(); render(); } return; }
+  if(t.dataset.advance){ state.settings.advancedDay=calKey(new Date()); persist(); render(); toast('New day started'); return; }
   if(t.dataset.go){ view=t.dataset.go; if(view==='settings'){ lastAdd=null; addTypeMem=null; } render(); window.scrollTo(0,0); return; }
   if(t.dataset.move){ const [arr,id,dir]=t.dataset.move.split(':'); const a=state[arr]; const i=a.findIndex(x=>x.id===id); if(i<0) return;
     const grp=x=>arr==='tasks'?x.kind:arr==='rewards'?x.type:arr==='bounties'?(x.doneTs?'done':'open'):'all';
@@ -640,6 +679,7 @@ V.addEventListener('click',e=>{
   if(t.dataset.guide){ open.guide=true; view='settings'; render(); setTimeout(()=>{ const g=document.querySelector('[data-drawer="guide"]'); if(g) g.scrollIntoView({block:'start'}); },50); return; }
   if(t.dataset.bounty){ const b=state.bounties.find(x=>x.id===t.dataset.bounty); if(b&&!b.doneTs){ const age=Math.max(0,daysBetween(b.addedDay,dayKey())), bonus=Math.max(0,EARLY_MAX-age), pts=b.pts+bonus; b.doneTs=Date.now(); state.log.push({id:uid(),ts:Date.now(),day:dayKey(),name:'Bounty: '+b.name,pts,kind:'bounty',bountyId:b.id,note:bonus?'Includes +'+bonus+' early bonus':''}); const hit=checkMilestones(); persist(); render(true); toast(hit?'Milestone unlocked: '+hit.name:'Bounty claimed: +'+pts); } return; }
   if(t.dataset.goal){ const g=state.goals.find(x=>x.id===t.dataset.goal), d=dayKey(); if(g){ if(g.days.includes(d)){ toast('Already logged today. Back at it tomorrow.'); return; } g.days.push(d); state.log.push({id:uid(),ts:Date.now(),day:d,name:'Goal: '+g.name,pts:g.pts,kind:'goal',goalId:g.id}); const hit=checkMilestones(); persist(); render(true); toast(hit?'Milestone unlocked: '+hit.name:'+'+g.pts+' for working on it'); } return; }
+  if(t.id==='shareBtn'){ shareBackup(); return; }
   if(t.id==='backupBtn'){ backup(); return; }
   if(t.id==='showText'){ textMode=textMode==='show'?null:'show'; render(); const b=document.getElementById('bkText'); if(b){b.focus();b.select();} return; }
   if(t.id==='pasteText'){ textMode=textMode==='paste'?null:'paste'; render(); const b=document.getElementById('pasteBox'); if(b) b.focus(); return; }
@@ -654,13 +694,13 @@ V.addEventListener('click',e=>{
     if(!(n>0)){ toast('Use a number above zero'); return; }
     if(type==='bounty') state.bounties.unshift({id:uid(),name,pts:n,addedDay:dayKey(),doneTs:null});
     else if(type==='goal') state.goals.unshift({id:uid(),name,pts:n,days:[]});
-    else if(type==='good'||type==='slip') state.tasks.unshift({id:uid(),name,pts:n,kind:type});
+    else if(type==='good'||type==='slip') state.tasks.unshift({id:uid(),name,pts:n,kind:type,pinned:pinNew(type)});
     else { state.rewards.push(type==='milestone'?{id:uid(),name,cost:n,type,earnedAt:null}:{id:uid(),name,cost:n,type}); if(type==='milestone') checkMilestones(); }
     lastAdd=n; addTypeMem=type;
     persist(); render(); toast('Added: '+name); return; }
   if(t.dataset.cat){ const [ci,ii]=t.dataset.cat.split(':').map(Number); const c=CATALOG[ci], it=c.items[ii];
     const i=state.tasks.findIndex(x=>x.name===it[0]&&x.kind===c.kind);
-    if(i>=0){ state.tasks.splice(i,1); toast('Taken off your list'); } else { state.tasks.push({id:uid(),name:it[0],pts:it[1],kind:c.kind}); toast('Added to '+(c.kind==='slip'?'Slipped up':'Did something good')); }
+    if(i>=0){ state.tasks.splice(i,1); toast('Taken off your list'); } else { state.tasks.push({id:uid(),name:it[0],pts:it[1],kind:c.kind,pinned:pinNew(c.kind)}); toast('Added to '+(c.kind==='slip'?'Slipped up':'Did something good')); }
     persist(); render(); return; }
   if(t.dataset.mine){ state.tasks=state.tasks.filter(x=>x.id!==t.dataset.mine); persist(); render(); toast('Removed'); return; }
   if(t.dataset.good){ const k=state.tasks.find(x=>x.id===t.dataset.good); if(k) logGood(k.name,k.pts); }
@@ -670,7 +710,7 @@ V.addEventListener('click',e=>{
   else if(t.dataset.undo){ undo(t.dataset.undo); }
   else if(t.dataset.del){ const [arr,id]=t.dataset.del.split(':'); state[arr]=state[arr].filter(x=>x.id!==id); persist(); render(); }
   else if(t.dataset.add){ const k=t.dataset.add;
-    if(k==='good'||k==='slip') state.tasks.push({id:uid(),name:k==='good'?'New good thing':'New slip-up',pts:k==='good'?3:1,kind:k});
+    if(k==='good'||k==='slip') state.tasks.push({id:uid(),name:k==='good'?'New good thing':'New slip-up',pts:k==='good'?3:1,kind:k,pinned:pinNew(k)});
     else state.rewards.push({id:uid(),name:k==='shop'?'New prize':'New milestone',cost:k==='shop'?20:150,type:k,earnedAt:k==='milestone'?null:undefined});
     if(k==='milestone') checkMilestones();
     persist(); render(); }
@@ -719,6 +759,14 @@ V.addEventListener('pointerdown',e=>{
 V.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==drag.id) return; e.preventDefault(); drag.cy=e.clientY; dragMove(); });
 V.addEventListener('pointerup',e=>{ if(drag&&e.pointerId===drag.id) dragEnd(); });
 V.addEventListener('pointercancel',e=>{ if(drag&&e.pointerId===drag.id) dragEnd(); });
+// iPhone: stop the page from scrolling (and cancelling the drag) while a handle is held
+V.addEventListener('touchstart',e=>{ if(e.target.closest&&e.target.closest('.grip')) e.preventDefault(); },{passive:false});
+V.addEventListener('touchmove',e=>{ if(drag) e.preventDefault(); },{passive:false});
+// Refresh Today when coming back to the app or when the day rolls over at 6am
+let shownDay=dayKey()+isLateNight();
+function dayCheck(){ const k=dayKey()+isLateNight(); if(k!==shownDay){ shownDay=k; if(view==='today'&&!drag) render(); } }
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden) dayCheck(); });
+setInterval(dayCheck,60000);
 
 V.addEventListener('change',e=>{
   const el=e.target;
